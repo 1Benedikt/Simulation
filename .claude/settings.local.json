@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./sdn.sh build *)",
+      "Bash(make MODE=debug)",
+      "Bash(make MODE=debug -d)",
+      "Bash(brew --version)",
+      "Bash(brew list *)",
+      "Bash(rm -rf out src/Makefile src/sdnproject_dbg)",
+      "Bash(bash -n sdn.sh)",
+      "Bash(bash sdn.sh build debug)",
+      "Bash(bash sdn.sh run BaselineStatic debug)"
+    ]
+  }
+}
