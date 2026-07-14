@@ -36,6 +36,7 @@ simulations/results/
 
 # IDE indexing/build scratch
 .metadata/
+.idea/
 
 # macOS
 .DS_Store

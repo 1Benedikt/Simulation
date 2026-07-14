@@ -1,6 +1,7 @@
 #include "CentralizedTrafficController.h"
 
 #include "../messages/ControlMessages_m.h"
+#include "PathEnumerator.h"
 
 #include <algorithm>
 #include <cctype>
@@ -40,12 +41,27 @@ void CentralizedTrafficController::initialize()
     strategy = par("strategy").stdstringValue();
     congestionThreshold = par("congestionThreshold").doubleValue();
 
+    //Mine signals
+    congestedLinkCountSignal = registerSignal("congestedLinkCount");
+    averageUtilizationSignal = registerSignal("averageUtilization");
+    failedLinksCountSignal = registerSignal("failedLinksCount");
+
     if (strategy.empty())
         strategy = "baseline";
 
+
     buildTopologyGraph();
     loadDemands();
+    initRoundRobin();
     applyBaselinePolicy();
+
+    PathEnumerator enumerator(topology);
+    for (const auto& demand : demands) {
+        auto key = demand.first + "->" + demand.second;
+        allPaths[key] = enumerator.enumerate(demand.first, demand.second);
+    }
+
+    logAllPaths();
 
     auto *timer = new cMessage("monitor");
     scheduleAt(simTime() + monitoringInterval, timer);
@@ -54,6 +70,7 @@ void CentralizedTrafficController::initialize()
 void CentralizedTrafficController::handleMessage(cMessage *msg)
 {
     if (msg->isSelfMessage()) {
+        monitoringTicks++;
         collectNetworkState();
         if (strategy == "dynamic")
             runDynamicDecision();
@@ -69,6 +86,35 @@ void CentralizedTrafficController::finish()
     recordScalar("knownLinks", static_cast<long>(links.size()));
     recordScalar("receivedNetworkStateReports", receivedReports);
     recordScalar("sentControlDecisions", sentDecisions);
+    recordScalar("pathSwitchCount", pathSwitchCount);
+
+    double totalDistinct = 0;
+    for (const auto& entry : distinctPathsUsed) {
+        recordScalar(("distinctPathsUsed:" + entry.first).c_str(),
+                     static_cast<long>(entry.second.size()));
+        totalDistinct += entry.second.size();
+    }
+    if (!distinctPathsUsed.empty())
+        recordScalar("averageDistinctPathsPerDemand",
+                     totalDistinct / static_cast<double>(distinctPathsUsed.size()));
+
+    if (strategy == "baseline") {
+        for (const auto& entry : baselinePaths)
+            for (const auto& node : entry.second)
+                cumulativeFanout[node] += monitoringTicks;
+    }
+
+    long denominator = static_cast<long>(demands.size()) * monitoringTicks;
+    std::vector<std::string> coreAndAgg = {
+        "core[0]", "core[1]",
+        "aggregation[0]", "aggregation[1]", "aggregation[2]", "aggregation[3]"
+    };
+    for (const auto& node : coreAndAgg) {
+        recordScalar(("fanout:" + node).c_str(), cumulativeFanout[node]);
+        if (denominator > 0)
+            recordScalar(("fanoutRate:" + node).c_str(),
+                         cumulativeFanout[node] / static_cast<double>(denominator));
+    }
 }
 
 void CentralizedTrafficController::collectNetworkState()
@@ -77,6 +123,36 @@ void CentralizedTrafficController::collectNetworkState()
     // Collect or estimate state from INET statistics, signals, or helper data.
     // Useful state includes link utilization, queue length, packet drops,
     // measured delay, failed links, or server/application load.
+
+    long congestedLinks = 0;
+    double totalUtilization = 0.0;
+    long consideredLinks = 0;
+    long failedLinks = 0;
+
+    for (const auto& entry : links) {
+        const LinkState& state = entry.second;
+         // NOTE: skip/guard against the phantom "a--b" entries that never
+             // get updated by processReport() (key-mismatch issue flagged earlier)
+             // -- otherwise this average is diluted by dead zero-utilization entries.
+        totalUtilization += state.utilization;
+        consideredLinks++;
+        if (!state.failed && state.utilization >= congestionThreshold)
+            congestedLinks++;
+
+        if (state.failed)
+            failedLinks++;
+    }
+
+    double averageUtilization = consideredLinks == 0 ? 0.0 : totalUtilization / consideredLinks;
+
+    emit(congestedLinkCountSignal, congestedLinks);
+    emit(averageUtilizationSignal, averageUtilization);
+    emit(failedLinksCountSignal, failedLinks);
+
+    EV_INFO << "Network state: " << consideredLinks << " known links, "
+            << congestedLinks << " congested, average utilization="
+            << averageUtilization << "\n";
+
 }
 
 void CentralizedTrafficController::processReport(cMessage *msg)
@@ -125,6 +201,7 @@ void CentralizedTrafficController::applyBaselinePolicy()
         baselinePaths[key] = path;
         recordScalar(("baselinePathLength:" + key).c_str(), static_cast<long>(path.size()));
         EV_INFO << "Baseline shortest path " << key << ": " << pathToString(path) << "\n";
+       // EV_INFO << "Baseline shortest path " << allPahts[key] << ": " << pathToString(path) << "\n";
     }
 }
 
@@ -185,15 +262,48 @@ std::vector<std::pair<std::string, std::string>> CentralizedTrafficController::d
 
 void CentralizedTrafficController::runDynamicDecision()
 {
-    // Example policy idea:
-    // 1. identify overloaded links or servers
-    // 2. select a less costly path/server for new or affected traffic
-    // 3. apply the decision through the abstraction chosen for the assignment
-    //
-    // Keep hysteresis or a minimum decision interval to avoid oscillation.
+
+    for (const auto& demand : demands) {
+        std::string SrcDestinationKey = demand.first + "->" + demand.second;
+        Node host = demand.first;
+        std::vector<Path> availablePaths = allPaths[SrcDestinationKey];
+        Path chosenPath = chooseServer(host, availablePaths);
+
+
+        sendControlDecision("reroute", SrcDestinationKey, chosenPath, 1);
+
+        if (currentPaths[SrcDestinationKey] != chosenPath) {
+            currentPaths[SrcDestinationKey] = chosenPath;
+            distinctPathsUsed[SrcDestinationKey].insert(pathToString(chosenPath));
+            pathSwitchCount++;
+        }
+
+        for (const auto& node : chosenPath)
+            cumulativeFanout[node]++;
+    }
+
+
+  /*  for (const auto& demand : demands) {
+        const std::string key = demand.first + "->" + demand.second;
+
+        auto cooldownIt = lastDemandDecisionTime.find(key);
+        if (cooldownIt != lastDemandDecisionTime.end() &&
+                simTime() - cooldownIt->second < minDecisionInterval)
+            continue;
+
+        const auto& paths = allPaths[key];
+        if (paths.empty())
+            continue;
+
+        int& counter = roundRobinCounterEntries[demand.first];
+        const std::vector<std::string>& chosenPath = paths[counter % static_cast<int>(paths.size())];
+        counter++;
+
+        lastDemandDecisionTime[key] = simTime();
+    }*/
 }
 
-void CentralizedTrafficController::sendControlDecision(const std::string& action, const std::string& target, const std::vector<std::string>& path, int priority)
+void CentralizedTrafficController::sendControlDecision(const std::string& action, const std::string& target, const Path& path, int priority)
 {
     if (!gate("decisionOut")->isConnected())
         return;
@@ -245,11 +355,11 @@ void CentralizedTrafficController::addBidirectionalLink(const std::string& a, co
     topology[a].push_back(b);
     topology[b].push_back(a);
 
-    links[a + "--" + b] = LinkState();
-    links[b + "--" + a] = LinkState();
+  //  links[a + "--" + b] = LinkState();
+  //  links[b + "--" + a] = LinkState();
 }
 
-std::vector<std::string> CentralizedTrafficController::choosePath(const std::string& src, const std::string& dst) const
+std::vector<std::string> CentralizedTrafficController::choosePath(const Node& src, const Node& dst) const
 {
     std::queue<std::string> queue;
     std::map<std::string, std::string> previous;
@@ -286,13 +396,22 @@ std::vector<std::string> CentralizedTrafficController::choosePath(const std::str
     return path;
 }
 
-std::string CentralizedTrafficController::chooseServer(const std::string& client, const std::vector<std::string>& candidates) const
+Path CentralizedTrafficController::chooseServer(const Node& client, const std::vector<Path>& candidates)
 {
     // TODO:
     // Replace with least-loaded, round-robin, latency-aware, or fairness-aware
     // server selection. This is the simplest actuation mechanism for a robust
     // bachelor-level load-balancing project.
-    return candidates.empty() ? "" : candidates.front();
+
+    int currentRoundRobinCounter = roundRobinCounterEntries[client];
+
+    int roundRobinIndex = currentRoundRobinCounter % static_cast<int>(candidates.size());
+    const Path& chosenPath = candidates[roundRobinIndex];
+    roundRobinCounterEntries[client] = currentRoundRobinCounter + 1;
+
+    EV_INFO << "LOAD BALANCED: " << pathToString(chosenPath) << "\n";
+
+    return chosenPath;
 }
 
 double CentralizedTrafficController::pathCost(const std::vector<std::string>& path) const
@@ -323,6 +442,25 @@ std::string CentralizedTrafficController::pathToString(const std::vector<std::st
         out << path[i];
     }
     return out.str();
+}
+
+void CentralizedTrafficController::logAllPaths() const
+{
+    for (const auto& entry : allPaths) {
+        EV_INFO << "Paths for " << entry.first << " (" << entry.second.size() << " total):\n";
+        for (size_t i = 0; i < entry.second.size(); i++)
+            EV_INFO << "  [" << i << "] " << pathToString(entry.second[i]) << "\n";
+    }
+}
+
+void CentralizedTrafficController::initRoundRobin()
+{
+    for (const auto& demand : demands)
+    {
+        std::string key = demand.first + "->" + demand.second;
+        roundRobinCounterEntries[key] = 0;
+    }
+
 }
 
 } // namespace sdnproject

@@ -1,5 +1,5 @@
 //
-// Generated file, do not edit! Created by opp_msgtool 6.3 from src/messages/ControlMessages.msg.
+// Generated file, do not edit! Created by opp_msgtool 6.3 from messages/ControlMessages.msg.
 //
 
 #ifndef __CONTROLMESSAGES_M_H
@@ -19,7 +19,7 @@
 class NetworkStateReport;
 class ControlDecision;
 /**
- * Class generated from <tt>src/messages/ControlMessages.msg:2</tt> by opp_msgtool.
+ * Class generated from <tt>messages/ControlMessages.msg:2</tt> by opp_msgtool.
  * <pre>
  * message NetworkStateReport
  * {
@@ -85,7 +85,7 @@ inline void doParsimPacking(omnetpp::cCommBuffer *b, const NetworkStateReport& o
 inline void doParsimUnpacking(omnetpp::cCommBuffer *b, NetworkStateReport& obj) {obj.parsimUnpack(b);}
 
 /**
- * Class generated from <tt>src/messages/ControlMessages.msg:13</tt> by opp_msgtool.
+ * Class generated from <tt>messages/ControlMessages.msg:13</tt> by opp_msgtool.
  * <pre>
  * message ControlDecision
  * {

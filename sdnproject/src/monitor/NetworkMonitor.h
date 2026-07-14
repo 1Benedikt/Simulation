@@ -12,6 +12,7 @@ class NetworkMonitor : public omnetpp::cSimpleModule
     omnetpp::simtime_t reportInterval;
     std::string monitoredNode;
 
+
   protected:
     virtual void initialize() override;
     virtual void handleMessage(omnetpp::cMessage *msg) override;
