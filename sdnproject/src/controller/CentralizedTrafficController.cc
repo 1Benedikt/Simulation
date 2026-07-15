@@ -4,6 +4,7 @@
 #include "PathEnumerator.h"
 
 #include <algorithm>
+#include <random>
 #include <cctype>
 #include <fstream>
 #include <limits>
@@ -39,12 +40,27 @@ void CentralizedTrafficController::initialize()
     minDecisionInterval = par("minDecisionInterval").doubleValue();
     lastDecisionTime = SimTime(-1);
     strategy = par("strategy").stdstringValue();
+    shufflePaths = par("shufflePaths").boolValue();
     congestionThreshold = par("congestionThreshold").doubleValue();
 
-    //Mine signals
     congestedLinkCountSignal = registerSignal("congestedLinkCount");
     averageUtilizationSignal = registerSignal("averageUtilization");
     failedLinksCountSignal = registerSignal("failedLinksCount");
+
+    static const std::vector<std::pair<std::string, const char*>> routerSignalDefs = {
+        {"core[0]",        "routerLoadCore0"},
+        {"core[1]",        "routerLoadCore1"},
+        {"aggregation[0]", "routerLoadAggregation0"},
+        {"aggregation[1]", "routerLoadAggregation1"},
+        {"aggregation[2]", "routerLoadAggregation2"},
+        {"aggregation[3]", "routerLoadAggregation3"},
+        {"edge[0]",        "routerLoadEdge0"},
+        {"edge[1]",        "routerLoadEdge1"},
+        {"edge[2]",        "routerLoadEdge2"},
+        {"edge[3]",        "routerLoadEdge3"},
+    };
+    for (const auto& def : routerSignalDefs)
+        routerLoadSignals[def.first] = registerSignal(def.second);
 
     if (strategy.empty())
         strategy = "baseline";
@@ -60,6 +76,9 @@ void CentralizedTrafficController::initialize()
         auto key = demand.first + "->" + demand.second;
         allPaths[key] = enumerator.enumerate(demand.first, demand.second);
     }
+
+    if (shufflePaths)
+        shuffleAllPaths();
 
     logAllPaths();
 
@@ -152,7 +171,24 @@ void CentralizedTrafficController::collectNetworkState()
     EV_INFO << "Network state: " << consideredLinks << " known links, "
             << congestedLinks << " congested, average utilization="
             << averageUtilization << "\n";
+}
 
+void CentralizedTrafficController::emitRouterLoad()
+{
+    std::map<std::string, long> load;
+    for (const auto& sig : routerLoadSignals)
+        load[sig.first] = 0;
+
+    const auto& activePaths = (strategy == "dynamic") ? currentPaths : baselinePaths;
+    for (const auto& entry : activePaths)
+        for (const auto& node : entry.second) {
+            auto it = load.find(node);
+            if (it != load.end())
+                it->second++;
+        }
+
+    for (const auto& sig : routerLoadSignals)
+        emit(sig.second, load[sig.first]);
 }
 
 void CentralizedTrafficController::processReport(cMessage *msg)
@@ -453,14 +489,18 @@ void CentralizedTrafficController::logAllPaths() const
     }
 }
 
+void CentralizedTrafficController::shuffleAllPaths()
+{
+    std::mt19937 rng(std::random_device{}());
+    for (auto& entry : allPaths)
+        std::shuffle(entry.second.begin(), entry.second.end(), rng);
+}
+
 void CentralizedTrafficController::initRoundRobin()
 {
+    int i = 0;
     for (const auto& demand : demands)
-    {
-        std::string key = demand.first + "->" + demand.second;
-        roundRobinCounterEntries[key] = 0;
-    }
-
+        roundRobinCounterEntries[demand.first] = i++;
 }
 
 } // namespace sdnproject

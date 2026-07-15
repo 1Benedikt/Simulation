@@ -32,6 +32,7 @@ class CentralizedTrafficController : public omnetpp::cSimpleModule
     omnetpp::simsignal_t congestedLinkCountSignal;
     omnetpp::simsignal_t averageUtilizationSignal;
     omnetpp::simsignal_t failedLinksCountSignal;
+    std::map<std::string, omnetpp::simsignal_t> routerLoadSignals;
 
 
     std::map<std::string, std::size_t> roundRobinCounters;          // per demand/client rotation index
@@ -43,6 +44,7 @@ class CentralizedTrafficController : public omnetpp::cSimpleModule
 
 
     std::string strategy;
+    bool shufflePaths = false;
     double congestionThreshold = 0.75;
     long receivedReports = 0;
     long sentDecisions = 0;
@@ -61,6 +63,7 @@ class CentralizedTrafficController : public omnetpp::cSimpleModule
     virtual void finish() override;
 
     virtual void collectNetworkState();
+    virtual void emitRouterLoad();
     virtual void processReport(omnetpp::cMessage *msg);
     virtual void applyBaselinePolicy();
     virtual void loadDemands();
@@ -75,6 +78,7 @@ class CentralizedTrafficController : public omnetpp::cSimpleModule
     virtual std::string pathToString(const std::vector<std::string>& path) const;
     virtual void logAllPaths() const;
     virtual void initRoundRobin();
+    virtual void shuffleAllPaths();
 };
 
 } // namespace sdnproject
