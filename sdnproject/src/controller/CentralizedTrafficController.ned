@@ -32,6 +32,10 @@ simple CentralizedTrafficController
         @statistic[routerLoadEdge3](record=vector,mean,max; title="Active demands through edge[3]");
         @signal[fairnessIndex](type=double);
         @statistic[fairnessIndex](record=vector,mean,min; title="Jain Fairness Index (core+aggregation)");
+        @signal[maxCoreLoad](type=long);
+        @statistic[maxCoreLoad](record=vector,mean,max; title="Peak load across core routers");
+        @signal[maxAggregationLoad](type=long);
+        @statistic[maxAggregationLoad](record=vector,mean,max; title="Peak load across aggregation routers");
 
         @class(sdnproject::CentralizedTrafficController);
         string strategy = default("baseline");
@@ -40,6 +44,8 @@ simple CentralizedTrafficController
         double minDecisionInterval @unit(s) = default(2s);
         string demandFile = default("simulations/demands.csv");
         bool shufflePaths = default(false);
+        int overloadThreshold = default(6); // router load above this counts as overloaded
+
         @display("i=block/control");
     gates:
         input reportIn[];

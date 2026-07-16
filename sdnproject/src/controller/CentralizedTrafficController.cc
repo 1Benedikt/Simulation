@@ -42,11 +42,15 @@ void CentralizedTrafficController::initialize()
     strategy = par("strategy").stdstringValue();
     shufflePaths = par("shufflePaths").boolValue();
     congestionThreshold = par("congestionThreshold").doubleValue();
+    overloadThreshold = par("overloadThreshold").intValue();
+    timeToFullPathCoverage = SimTime(-1);
 
     congestedLinkCountSignal = registerSignal("congestedLinkCount");
     averageUtilizationSignal = registerSignal("averageUtilization");
     failedLinksCountSignal = registerSignal("failedLinksCount");
     fairnessIndexSignal = registerSignal("fairnessIndex");
+    maxCoreLoadSignal = registerSignal("maxCoreLoad");
+    maxAggregationLoadSignal = registerSignal("maxAggregationLoad");
 
     static const std::vector<std::pair<std::string, const char*>> routerSignalDefs = {
         {"core[0]",        "routerLoadCore0"},
@@ -136,6 +140,25 @@ void CentralizedTrafficController::finish()
             recordScalar(("fanoutRate:" + node).c_str(),
                          cumulativeFanout[node] / static_cast<double>(denominator));
     }
+
+    recordScalar("overloadedIntervals", overloadedIntervals);
+    if (monitoringTicks > 0)
+        recordScalar("overloadFrequency",
+                     overloadedIntervals / static_cast<double>(monitoringTicks));
+
+    // Jain's index over the cumulative fanout: long-run fairness, as opposed to
+    // the per-interval fairnessIndex signal (instantaneous fairness).
+    double sumX = 0.0, sumX2 = 0.0;
+    for (const auto& node : coreAndAgg) {
+        double x = static_cast<double>(cumulativeFanout[node]);
+        sumX  += x;
+        sumX2 += x * x;
+    }
+    double cumulativeFairness = (sumX2 == 0.0) ? 1.0 : (sumX * sumX) / (coreAndAgg.size() * sumX2);
+    recordScalar("cumulativeFairnessIndex", cumulativeFairness);
+
+    if (timeToFullPathCoverage >= SIMTIME_ZERO)
+        recordScalar("timeToFullPathCoverage", timeToFullPathCoverage.dbl());
 }
 
 void CentralizedTrafficController::collectNetworkState()
@@ -205,6 +228,17 @@ void CentralizedTrafficController::emitRouterLoad()
     }
     double fairness = (sumX2 == 0.0) ? 1.0 : (sumX * sumX) / (fairnessNodes.size() * sumX2);
     emit(fairnessIndexSignal, fairness);
+
+    long maxCoreLoad = std::max(load["core[0]"], load["core[1]"]);
+    long maxAggregationLoad = 0;
+    for (int i = 0; i < 4; i++)
+        maxAggregationLoad = std::max(maxAggregationLoad,
+                                      load["aggregation[" + std::to_string(i) + "]"]);
+    emit(maxCoreLoadSignal, maxCoreLoad);
+    emit(maxAggregationLoadSignal, maxAggregationLoad);
+
+    if (std::max(maxCoreLoad, maxAggregationLoad) > overloadThreshold)
+        overloadedIntervals++;
 }
 
 void CentralizedTrafficController::processReport(cMessage *msg)
@@ -334,25 +368,22 @@ void CentralizedTrafficController::runDynamicDecision()
             cumulativeFanout[node]++;
     }
 
-
-  /*  for (const auto& demand : demands) {
-        const std::string key = demand.first + "->" + demand.second;
-
-        auto cooldownIt = lastDemandDecisionTime.find(key);
-        if (cooldownIt != lastDemandDecisionTime.end() &&
-                simTime() - cooldownIt->second < minDecisionInterval)
-            continue;
-
-        const auto& paths = allPaths[key];
-        if (paths.empty())
-            continue;
-
-        int& counter = roundRobinCounterEntries[demand.first];
-        const std::vector<std::string>& chosenPath = paths[counter % static_cast<int>(paths.size())];
-        counter++;
-
-        lastDemandDecisionTime[key] = simTime();
-    }*/
+    if (timeToFullPathCoverage < SIMTIME_ZERO) {
+        bool allCovered = true;
+        for (const auto& demand : demands) {
+            auto key = demand.first + "->" + demand.second;
+            auto pathsIt = allPaths.find(key);
+            auto usedIt = distinctPathsUsed.find(key);
+            if (pathsIt == allPaths.end() || pathsIt->second.empty()
+                    || usedIt == distinctPathsUsed.end()
+                    || usedIt->second.size() < pathsIt->second.size()) {
+                allCovered = false;
+                break;
+            }
+        }
+        if (allCovered)
+            timeToFullPathCoverage = simTime();
+    }
 }
 
 void CentralizedTrafficController::sendControlDecision(const std::string& action, const std::string& target, const Path& path, int priority)

@@ -33,6 +33,8 @@ class CentralizedTrafficController : public omnetpp::cSimpleModule
     omnetpp::simsignal_t averageUtilizationSignal;
     omnetpp::simsignal_t failedLinksCountSignal;
     omnetpp::simsignal_t fairnessIndexSignal;
+    omnetpp::simsignal_t maxCoreLoadSignal;
+    omnetpp::simsignal_t maxAggregationLoadSignal;
     std::map<std::string, omnetpp::simsignal_t> routerLoadSignals;
 
 
@@ -42,6 +44,9 @@ class CentralizedTrafficController : public omnetpp::cSimpleModule
     std::map<std::string, std::set<std::string>> distinctPathsUsed;  // evaluation metric
     std::map<std::string, long> cumulativeFanout;
     long monitoringTicks = 0;
+    long overloadThreshold = 6;      // router load above this counts as overloaded
+    long overloadedIntervals = 0;    // intervals with at least one overloaded router
+    omnetpp::simtime_t timeToFullPathCoverage; // first time every demand has used all its paths
 
 
     std::string strategy;
