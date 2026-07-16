@@ -30,6 +30,8 @@ simple CentralizedTrafficController
         @statistic[routerLoadEdge2](record=vector,mean,max; title="Active demands through edge[2]");
         @signal[routerLoadEdge3](type=long);
         @statistic[routerLoadEdge3](record=vector,mean,max; title="Active demands through edge[3]");
+        @signal[fairnessIndex](type=double);
+        @statistic[fairnessIndex](record=vector,mean,min; title="Jain Fairness Index (core+aggregation)");
 
         @class(sdnproject::CentralizedTrafficController);
         string strategy = default("baseline");

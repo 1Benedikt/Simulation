@@ -46,6 +46,7 @@ void CentralizedTrafficController::initialize()
     congestedLinkCountSignal = registerSignal("congestedLinkCount");
     averageUtilizationSignal = registerSignal("averageUtilization");
     failedLinksCountSignal = registerSignal("failedLinksCount");
+    fairnessIndexSignal = registerSignal("fairnessIndex");
 
     static const std::vector<std::pair<std::string, const char*>> routerSignalDefs = {
         {"core[0]",        "routerLoadCore0"},
@@ -93,6 +94,7 @@ void CentralizedTrafficController::handleMessage(cMessage *msg)
         collectNetworkState();
         if (strategy == "dynamic")
             runDynamicDecision();
+        emitRouterLoad();
         scheduleAt(simTime() + monitoringInterval, msg);
         return;
     }
@@ -189,6 +191,20 @@ void CentralizedTrafficController::emitRouterLoad()
 
     for (const auto& sig : routerLoadSignals)
         emit(sig.second, load[sig.first]);
+
+    static const std::vector<std::string> fairnessNodes = {
+        "core[0]", "core[1]",
+        "aggregation[0]", "aggregation[1]", "aggregation[2]", "aggregation[3]"
+    };
+
+    double sumX = 0.0, sumX2 = 0.0;
+    for (const auto& node : fairnessNodes) {
+        double x = static_cast<double>(load[node]);
+        sumX  += x;
+        sumX2 += x * x;
+    }
+    double fairness = (sumX2 == 0.0) ? 1.0 : (sumX * sumX) / (fairnessNodes.size() * sumX2);
+    emit(fairnessIndexSignal, fairness);
 }
 
 void CentralizedTrafficController::processReport(cMessage *msg)

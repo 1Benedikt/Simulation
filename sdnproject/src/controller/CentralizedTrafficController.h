@@ -32,6 +32,7 @@ class CentralizedTrafficController : public omnetpp::cSimpleModule
     omnetpp::simsignal_t congestedLinkCountSignal;
     omnetpp::simsignal_t averageUtilizationSignal;
     omnetpp::simsignal_t failedLinksCountSignal;
+    omnetpp::simsignal_t fairnessIndexSignal;
     std::map<std::string, omnetpp::simsignal_t> routerLoadSignals;
 
 
